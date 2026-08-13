@@ -1,0 +1,64 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+/// Konfigurasi dataset — menyimpan info header & koordinat
+model Dataset {
+  id        String   @id @default(cuid())
+  name      String   @default("Unnamed Dataset")
+  headers   String[] /// Semua kolom dari Excel
+  latCol    String?  /// Nama kolom latitude (terpisah)
+  lngCol    String?  /// Nama kolom longitude (terpisah)
+  coordCol  String?  /// Nama kolom koordinat gabungan (format: lat, lng)
+  rowCount  Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  points    DataPoint[]
+
+  @@index([isActive])
+}
+
+/// Titik data — format-agnostic, semua kolom Excel disimpan di metadata (JSONB)
+model DataPoint {
+  id        String   @id @default(cuid())
+  datasetId String
+  latitude  Float
+  longitude Float
+  metadata  Json     /// Semua kolom Excel (kecuali koordinat)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  dataset   Dataset  @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+  photos    Photo[]
+
+  @@index([datasetId])
+  @@index([latitude, longitude])
+}
+
+/// Foto per ODP/DataPoint — file disimpan di Supabase Storage
+model Photo {
+  id         String   @id @default(cuid())
+  pointId    String
+  fileName   String   /// Nama file asli (misal: ODP-001.jpg)
+  fileSize   Int      /// Ukuran file dalam bytes
+  mimeType   String   @default("image/jpeg")
+  url        String   /// Public URL Supabase Storage
+  thumbUrl   String?  /// URL thumbnail (200x200)
+  width      Int?     /// Lebar gambar asli
+  height     Int?     /// Tinggi gambar asli
+  caption    String?  /// Keterangan foto
+  createdAt  DateTime @default(now())
+
+  point      DataPoint @relation(fields: [pointId], references: [id], onDelete: Cascade)
+
+  @@index([pointId])
+  @@index([createdAt])
+}
