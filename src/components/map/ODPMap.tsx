@@ -305,16 +305,8 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
           fillOpacity: isSelected ? 0.9 : (isInArea ? 0.2 : 0.75),
         })
         marker.bindPopup(popupFn(point), { maxWidth: 340, minWidth: 260 })
-        // Permanent label: tampilkan nilai kolom Code/nameCol2
-        const label = getPointLabel(point.metadata || {}, mc)
-        if (label) {
-          marker.bindTooltip(label.substring(0, 25), {
-            permanent: true,
-            direction: 'right',
-            className: 'odp-map-label',
-            offset: [6, -1],
-          })
-        }
+        // Simpan metadata di marker untuk label dinamis (bind hanya saat zoom dekat)
+        ;(marker as any)._pointMeta = point.metadata || {}
         marker.on('click', () => stableSelect(point))
         cluster.addLayer(marker)
         markersRef.current.set(point.id, marker)
@@ -323,6 +315,44 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
 
     return () => { if (updateTimerRef.current) clearTimeout(updateTimerRef.current) }
   }, [mapReady, points, columns, stableSelect, selectedAreaIds])
+
+  // ── Label dinamis: hanya tampil saat zoom >= 13 ──
+  useEffect(() => {
+    const map = mapRef.current
+    const cluster = clusterRef.current
+    if (!map || !cluster) return
+
+    const LABEL_ZOOM = 13
+
+    const syncLabels = () => {
+      const zoom = map.getZoom()
+      const show = zoom >= LABEL_ZOOM
+      const mc = mcRef.current
+
+      cluster.eachLayer((layer: any) => {
+        const hasTooltip = !!layer.getTooltip()
+        if (show && !hasTooltip) {
+          const meta = layer._pointMeta
+          if (meta) {
+            const label = getPointLabel(meta, mc)
+            if (label) {
+              layer.bindTooltip(label.substring(0, 25), {
+                permanent: true, direction: 'right', className: 'odp-map-label', offset: [6, -1],
+              })
+            }
+          }
+        } else if (!show && hasTooltip) {
+          layer.unbindTooltip()
+        }
+      })
+    }
+
+    map.on('zoomend', syncLabels)
+    // Initial sync setelah marker selesai dibuat
+    const initTimer = setTimeout(syncLabels, 300)
+
+    return () => { map.off('zoomend', syncLabels); clearTimeout(initTimer) }
+  }, [mapReady])
 
   // Highlight selected point
   useEffect(() => {
