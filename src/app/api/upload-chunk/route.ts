@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { Prisma } from '@prisma/client'
 
 // ── Coordinate auto-detection ──
 
@@ -139,74 +138,95 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ chunkIndex: body.chunkIndex, totalChunks: body.totalChunks, inserted: processed.length, skipped: rows.length - processed.length })
     }
 
-    // ── UPDATE DATASET (update-in-place, foto tetap nyambung) ──
-    if (action === 'update-dataset') {
-      const { keyCol, rows: allRows } = body
-      if (!datasetId || !keyCol || !Array.isArray(allRows)) {
+    // ── UPDATE CHUNK (update-in-place, chunked, foto tetap nyambung) ──
+    if (action === 'update-chunk') {
+      const { keyCol, rows: chunkRows } = body
+      if (!datasetId || !keyCol || !Array.isArray(chunkRows)) {
         return NextResponse.json({ error: 'datasetId, keyCol, dan rows wajib' }, { status: 400 })
       }
 
       const det: { latCol: string | null; lngCol: string | null; coordCol: string | null } = detection || { latCol: null, lngCol: null, coordCol: null }
 
-      // 1. Ambil semua DataPoint lama, index berdasarkan keyCol di metadata
-      const existingPoints = await db.dataPoint.findMany({
-        where: { datasetId },
-        select: { id: true, metadata: true },
-      })
+      // 1. Ambil key values dari chunk ini
+      const chunkKeys = chunkRows
+        .map(r => r[keyCol])
+        .filter(v => v !== undefined && v !== null && String(v).trim() !== '')
+        .map(v => String(v).trim().toLowerCase())
 
-      const existingIndex = new Map<string, { id: string; meta: Record<string, any> }>()
+      // 2. Query existing DataPoints yang key-nya cocok (hanya yang relevan)
+      const existingPoints = chunkKeys.length > 0
+        ? await db.dataPoint.findMany({
+            where: { datasetId },
+            select: { id: true, metadata: true },
+          })
+        : []
+
+      // Build index dari existing: normalized key → id
+      const existingIndex = new Map<string, string>()
       for (const p of existingPoints) {
         const meta = p.metadata as Record<string, any>
-        const keyValue = meta[keyCol]
-        if (keyValue !== undefined && keyValue !== null && String(keyValue).trim() !== '') {
-          const normalized = String(keyValue).trim().toLowerCase()
-          existingIndex.set(normalized, { id: p.id, meta })
+        const kv = meta[keyCol]
+        if (kv !== undefined && kv !== null && String(kv).trim() !== '') {
+          existingIndex.set(String(kv).trim().toLowerCase(), p.id)
         }
       }
 
-      // 2. Proses semua baris: update existing atau insert baru
-      let updated = 0
+      // 3. Proses: pisah update vs insert
+      const toUpdate: { id: string; latitude: number; longitude: number; metadata: Record<string, any> }[] = []
+      const toInsert: { datasetId: string; latitude: number; longitude: number; metadata: Record<string, any> }[] = []
+      let skipped = 0
+
+      for (const row of chunkRows) {
+        const { latitude, longitude } = extractCoordinates(row, det)
+        const metadata = buildMetadata(row, det)
+        const keyValue = row[keyCol]
+        const normalizedKey = keyValue !== undefined && keyValue !== null && String(keyValue).trim() !== ''
+          ? String(keyValue).trim().toLowerCase()
+          : ''
+
+        // Skip baris kosong
+        if (!normalizedKey && Object.values(metadata).every(v => v === '') && latitude === 0 && longitude === 0) {
+          skipped++
+          continue
+        }
+
+        if (normalizedKey && existingIndex.has(normalizedKey)) {
+          toUpdate.push({ id: existingIndex.get(normalizedKey)!, latitude, longitude, metadata })
+        } else {
+          toInsert.push({ datasetId, latitude, longitude, metadata })
+        }
+      }
+
+      // 4. Execute: batch insert + individual updates
       let inserted = 0
-      const processedIds = new Set<string>()
-      const BATCH_SIZE = 100
+      let updated = 0
 
-      for (let i = 0; i < allRows.length; i += BATCH_SIZE) {
-        const batch = allRows.slice(i, i + BATCH_SIZE)
-        const ops: Prisma.PrismaPromise<any>[] = []
-
-        for (const row of batch) {
-          const { latitude, longitude } = extractCoordinates(row, det)
-          const metadata = buildMetadata(row, det)
-          const keyValue = row[keyCol]
-          const normalizedKey = keyValue !== undefined && keyValue !== null && String(keyValue).trim() !== ''
-            ? String(keyValue).trim().toLowerCase()
-            : ''
-
-          if (normalizedKey && existingIndex.has(normalizedKey)) {
-            // UPDATE: ID tetap sama → foto tetap nyambung
-            const existing = existingIndex.get(normalizedKey)!
-            processedIds.add(existing.id)
-            ops.push(db.dataPoint.update({
-              where: { id: existing.id },
-              data: { latitude, longitude, metadata },
-            }))
-            updated++
-          } else {
-            // INSERT: DataPoint baru
-            ops.push(db.dataPoint.create({
-              data: { datasetId, latitude, longitude, metadata },
-            }))
-            inserted++
-          }
-        }
-
-        await Promise.all(ops)
+      if (toInsert.length > 0) {
+        const res = await db.dataPoint.createMany({ data: toInsert })
+        inserted = res.count
       }
 
-      // 3. Hitung yang tidak ada di file baru
-      const removedCount = existingPoints.length - processedIds.size
+      for (const item of toUpdate) {
+        await db.dataPoint.update({
+          where: { id: item.id },
+          data: { latitude: item.latitude, longitude: item.longitude, metadata: item.metadata },
+        })
+        updated++
+      }
 
-      // 4. Update dataset info
+      return NextResponse.json({ updated, inserted, skipped, chunkIndex: body.chunkIndex, totalChunks: body.totalChunks })
+    }
+
+    // ── FINALIZE UPDATE: update dataset info & count removed ──
+    if (action === 'update-finalize') {
+      const { keyCol, totalRows } = body
+      if (!datasetId || !keyCol) {
+        return NextResponse.json({ error: 'datasetId dan keyCol wajib' }, { status: 400 })
+      }
+
+      const det: { latCol: string | null; lngCol: string | null; coordCol: string | null } = detection || { latCol: null, lngCol: null, coordCol: null }
+
+      // Update dataset headers & row count
       await db.dataset.update({
         where: { id: datasetId },
         data: {
@@ -214,11 +234,12 @@ export async function POST(req: NextRequest) {
           latCol: det.latCol,
           lngCol: det.lngCol,
           coordCol: det.coordCol,
-          rowCount: allRows.length,
+          rowCount: totalRows || 0,
+          updatedAt: new Date(),
         },
       })
 
-      return NextResponse.json({ updated, inserted, removed: removedCount, totalRows: allRows.length, existingTotal: existingPoints.length })
+      return NextResponse.json({ ok: true })
     }
 
     // ── GET ACTIVE DATASET INFO (untuk update mode) ──

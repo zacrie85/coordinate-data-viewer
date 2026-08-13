@@ -129,34 +129,61 @@ export default function UploadExcelDialog({ open, onOpenChange, onUploadComplete
       if (allRows.length === 0) { toast.error('File kosong'); setUploading(false); return }
 
       if (mode === 'update') {
-        // ═══ UPDATE MODE: update-in-place, foto tetap nyambung ═══
-        const res = await fetch('/api/upload-chunk', {
+        // ═══ UPDATE MODE: chunked update, foto tetap nyambung ═══
+        const det = detection || { latCol: null, lngCol: null, coordCol: null }
+        const totalChunks = Math.ceil(allRows.length / CHUNK_SIZE)
+        let totalUpdated = 0
+        let totalInserted = 0
+        let totalSkipped = 0
+
+        for (let i = 0; i < totalChunks; i++) {
+          const chunk = allRows.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE)
+          const res = await fetch('/api/upload-chunk', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'update-chunk',
+              datasetId: activeDataset?.id,
+              headers,
+              keyCol,
+              rows: chunk,
+              chunkIndex: i,
+              totalChunks,
+              detection: det,
+            }),
+          })
+          const data = await res.json()
+          if (!res.ok) throw new Error(data.error || `Gagal di chunk ${i + 1}`)
+          totalUpdated += data.updated || 0
+          totalInserted += data.inserted || 0
+          totalSkipped += data.skipped || 0
+          setProgress(Math.round(((i + 1) / totalChunks) * 100))
+        }
+
+        // Finalize: update dataset info
+        await fetch('/api/upload-chunk', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            action: 'update-dataset',
+            action: 'update-finalize',
             datasetId: activeDataset?.id,
             headers,
             keyCol,
-            rows: allRows,
-            detection: detection || { latCol: null, lngCol: null, coordCol: null },
+            totalRows: allRows.length,
+            detection: det,
           }),
         })
-        const data = await res.json()
-        if (!res.ok) throw new Error(data.error || 'Gagal update')
 
-        setProgress(100)
         setResult({
-          totalRows: data.totalRows,
-          updated: data.updated,
-          inserted: data.inserted,
-          removed: data.removed,
+          totalRows: allRows.length,
+          updated: totalUpdated,
+          inserted: totalInserted,
+          skipped: totalSkipped,
           datasetName: activeDataset?.name || 'Update',
           mode: 'update',
         })
 
-        const msg = `Update berhasil: ${data.updated} diupdate, ${data.inserted} baru`
-        toast.success(msg)
+        toast.success(`Update berhasil: ${totalUpdated} diupdate, ${totalInserted} baru`)
         onUploadComplete()
       } else {
         // ═══ APPEND / REPLACE MODE: buat dataset baru ═══
