@@ -155,12 +155,12 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
               background: transparent !important;
               border: none !important;
               box-shadow: none !important;
-              color: #1e293b !important;
-              font-size: 10px !important;
+              color: #facc15 !important;
+              font-size: 14px !important;
               font-weight: 700 !important;
               font-family: ui-monospace, monospace !important;
               padding: 1px 3px !important;
-              text-shadow: 1px 1px 1px white, -1px -1px 1px white, 1px -1px 1px white, -1px 1px 1px white, 0 0 3px white !important;
+              text-shadow: 1px 1px 2px rgba(0,0,0,0.8), -1px -1px 2px rgba(0,0,0,0.8), 1px -1px 2px rgba(0,0,0,0.8), -1px 1px 2px rgba(0,0,0,0.8), 0 0 4px rgba(0,0,0,0.6) !important;
               white-space: nowrap !important;
             }
             .odp-map-label::before { display: none !important; }
