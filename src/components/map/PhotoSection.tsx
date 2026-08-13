@@ -3,19 +3,17 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Camera, Upload, X, Trash2, ZoomIn, Plus, Loader2, AlertCircle } from 'lucide-react'
 import { toast } from 'sonner'
+import { createClient } from '@supabase/supabase-js'
 
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
-const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL || '',
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+)
 
 interface PhotoItem {
   id: string; fileName: string; fileSize: number; url: string
   thumbUrl: string | null; width: number | null; height: number | null
   caption: string | null; createdAt: string
-}
-
-function makeId() {
-  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID()
-  return 'xxxx-xxxx-xxxx'.replace(/x/g, () => Math.floor(Math.random() * 16).toString(16))
 }
 
 function makeThumb(file: File, sz = 200): Promise<Blob> {
@@ -41,16 +39,6 @@ function getImgSize(file: File): Promise<{ w: number; h: number }> {
   })
 }
 
-async function storageUpload(file: File | Blob, path: string, type: string): Promise<string> {
-  const r = await fetch(`${SUPABASE_URL}/storage/v1/object/odp-photos/${path}`, {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': type, 'x-upsert': 'true' },
-    body: file,
-  })
-  if (!r.ok) { const t = await r.text(); throw new Error(`Storage ${r.status}: ${t.substring(0, 150)}`) }
-  return `${SUPABASE_URL}/storage/v1/object/public/odp-photos/${path}`
-}
-
 export default function PhotoSection({ pointId }: { pointId: string }) {
   const [photos, setPhotos] = useState<PhotoItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -73,34 +61,38 @@ export default function PhotoSection({ pointId }: { pointId: string }) {
     setUploading(true); setStatusMsg('')
 
     try {
-      if (!SUPABASE_URL || !SUPABASE_KEY) {
-        toast.error('Supabase belum dikonfigurasi di Vercel!', { duration: 8000 })
-        setStatusMsg('ERROR: SUPABASE_URL atau SUPABASE_ANON_KEY kosong')
-        return
-      }
-
-      const ext = '.' + (file.name.split('.').pop()?.toLowerCase() || 'jpg')
-      if (!['.jpg', '.jpeg', '.png', '.webp'].includes(ext)) {
-        toast.error('Gunakan JPG, PNG, atau WebP'); return
-      }
+      const ext = (file.name.split('.').pop()?.toLowerCase() || 'jpg')
+      if (!['jpg', 'jpeg', 'png', 'webp'].includes(ext)) { toast.error('Gunakan JPG, PNG, atau WebP'); return }
       if (file.size > 10 * 1024 * 1024) { toast.error('Maksimal 10MB'); return }
 
-      const fid = makeId()
-      const baseExt = ext.replace('.', '') || 'jpg'
+      const fid = crypto.randomUUID?.() || ('xxxx-xxxx-xxxx'.replace(/x/g, () => Math.floor(Math.random() * 16).toString(16)))
 
+      // 1. Upload original ke Supabase Storage
       setStatusMsg('1/4 Upload foto...')
-      const url = await storageUpload(file, `${pointId}/${fid}.${baseExt}`, file.type || 'image/jpeg')
+      const origPath = `${pointId}/${fid}.${ext}`
+      const { error: err1 } = await supabase.storage.from('odp-photos').upload(origPath, file, { upsert: true })
+      if (err1) throw new Error(`Upload gagal: ${err1.message}`)
+      const { data: urlData } = supabase.storage.from('odp-photos').getPublicUrl(origPath)
+      const url = urlData.publicUrl
 
+      // 2. Upload thumbnail
       setStatusMsg('2/4 Buat thumbnail...')
       let thumbUrl: string | null = null
       try {
         const tb = await makeThumb(file)
-        thumbUrl = await storageUpload(tb, `${pointId}/thumb_${fid}.jpg`, 'image/jpeg')
-      } catch (e: any) { console.warn('thumb:', e) }
+        const thumbPath = `${pointId}/thumb_${fid}.jpg`
+        const { error: err2 } = await supabase.storage.from('odp-photos').upload(thumbPath, tb, { upsert: true, contentType: 'image/jpeg' })
+        if (!err2) {
+          const { data: td } = supabase.storage.from('odp-photos').getPublicUrl(thumbPath)
+          thumbUrl = td.publicUrl
+        }
+      } catch (e) { console.warn('thumb:', e) }
 
+      // 3. Baca ukuran
       setStatusMsg('3/4 Baca ukuran...')
       const { w, h } = await getImgSize(file)
 
+      // 4. Simpan metadata ke DB
       setStatusMsg('4/4 Simpan data...')
       const r = await fetch('/api/photos', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
