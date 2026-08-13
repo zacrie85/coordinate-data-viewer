@@ -30,15 +30,16 @@ interface MapViewProps {
   drawMode?: boolean
   onAreaSelected?: (ids: Set<string>) => void
   selectedAreaIds?: Set<string> | null
+  dragZoom?: boolean
+  onDragZoomEnd?: () => void
 }
 
-// ── Point-in-polygon (ray casting) — FIX: lat/lng sudah benar ──
-// polygon: [[lat, lng], ...]  →  x = lng, y = lat
+// ── Point-in-polygon (ray casting) ──
 function pointInPolygon(lat: number, lng: number, polygon: [number, number][]): boolean {
   let inside = false
   for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-    const xi = polygon[i][1], yi = polygon[i][0]  // x=lng, y=lat
-    const xj = polygon[j][1], yj = polygon[j][0]  // x=lng, y=lat
+    const xi = polygon[i][1], yi = polygon[i][0]
+    const xj = polygon[j][1], yj = polygon[j][0]
     const intersect = ((yi > lat) !== (yj > lat)) && (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi)
     if (intersect) inside = !inside
   }
@@ -89,7 +90,6 @@ function statusColor(val: string): string {
 }
 
 function getPointLabel(meta: Record<string, any>, mc: MarkerConfig): string {
-  // Pakai labelCol jika dipilih manual
   if (mc.labelCol) {
     const v = String(meta[mc.labelCol] || '').trim()
     if (v) return v
@@ -97,15 +97,15 @@ function getPointLabel(meta: Record<string, any>, mc: MarkerConfig): string {
   return ''
 }
 
-export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, columns, markerConfig, drawMode, onAreaSelected, selectedAreaIds }: MapViewProps) {
+export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, columns, markerConfig, drawMode, onAreaSelected, selectedAreaIds, dragZoom, onDragZoomEnd }: MapViewProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<any>(null)
   const clusterRef = useRef<any>(null)
   const markersRef = useRef<Map<string, any>>(new Map())
   const [mapError, setMapError] = useState<string | null>(null)
   const [mapReady, setMapReady] = useState(false)
-  const [drawing, setDrawing] = useState(false)          // FIX: state untuk tombol Finish
-  const [vertexCount, setVertexCount] = useState(0)      // FIX: jumlah vertex untuk UI
+  const [drawing, setDrawing] = useState(false)
+  const [vertexCount, setVertexCount] = useState(0)
   const pointsRef = useRef(points)
   useEffect(() => { pointsRef.current = points }, [points])
   const stableSelect = useCallback((p: DataPoint | null) => onSelectPoint(p), [onSelectPoint])
@@ -114,14 +114,21 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
   const buildPopupRef = useRef<(p: DataPoint) => string>(() => '')
 
   // Drawing state
-  const drawingRef = useRef<any>(null) // L.polyline for in-progress drawing
+  const drawingRef = useRef<any>(null)
   const drawVerticesRef = useRef<[number, number][]>([])
-  const drawLayerRef = useRef<any>(null) // L.layerGroup for polygon
-  const vertexMarkersRef = useRef<any[]>([]) // FIX: simpan vertex markers agar bisa dihapus
+  const drawLayerRef = useRef<any>(null)
+  const vertexMarkersRef = useRef<any[]>([])
   const drawModeRef = useRef(drawMode)
-  const onAreaSelectedRef = useRef(onAreaSelected) // FIX: ref untuk callback
+  const onAreaSelectedRef = useRef(onAreaSelected)
   useEffect(() => { drawModeRef.current = drawMode }, [drawMode])
   useEffect(() => { onAreaSelectedRef.current = onAreaSelected }, [onAreaSelected])
+
+  // Drag Zoom state
+  const dragZoomRef = useRef(false)
+  const dragStartRef = useRef<{ x: number; y: number } | null>(null)
+  const dragDivRef = useRef<HTMLDivElement | null>(null)
+  const dragBoxElRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => { dragZoomRef.current = !!dragZoom }, [dragZoom])
 
   // Init map with clustering
   useEffect(() => {
@@ -305,7 +312,6 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
           fillOpacity: isSelected ? 0.9 : (isInArea ? 0.2 : 0.75),
         })
         marker.bindPopup(popupFn(point), { maxWidth: 340, minWidth: 260 })
-        // Simpan metadata di marker untuk label dinamis (bind hanya saat zoom dekat)
         ;(marker as any)._pointMeta = point.metadata || {}
         marker.on('click', () => stableSelect(point))
         cluster.addLayer(marker)
@@ -348,11 +354,111 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
     }
 
     map.on('zoomend', syncLabels)
-    // Initial sync setelah marker selesai dibuat
     const initTimer = setTimeout(syncLabels, 300)
 
     return () => { map.off('zoomend', syncLabels); clearTimeout(initTimer) }
   }, [mapReady])
+
+  // Esc untuk keluar dari drag zoom
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && dragZoomRef.current) onDragZoomEnd?.()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onDragZoomEnd])
+
+  // ── Drag Zoom Handlers ──
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !L) return
+
+    if (dragZoom) {
+      map.dragging.disable()
+      map.doubleClickZoom.disable()
+      map.getContainer().style.cursor = 'crosshair'
+
+      let overlayDiv = document.createElement('div')
+      overlayDiv.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;z-index:1000;pointer-events:none;'
+      map.getContainer().appendChild(overlayDiv)
+      dragDivRef.current = overlayDiv
+
+      let boxDiv = document.createElement('div')
+      boxDiv.style.cssText = 'position:absolute;border:2px dashed #7c3aed;background:rgba(124,58,237,0.1);display:none;pointer-events:none;z-index:1001;'
+      overlayDiv.appendChild(boxDiv)
+      dragBoxElRef.current = boxDiv
+
+      const onMouseDown = (e: MouseEvent) => {
+        const rect = map.getContainer().getBoundingClientRect()
+        dragStartRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top }
+        boxDiv.style.display = 'block'
+        boxDiv.style.left = dragStartRef.current.x + 'px'
+        boxDiv.style.top = dragStartRef.current.y + 'px'
+        boxDiv.style.width = '0px'
+        boxDiv.style.height = '0px'
+      }
+
+      const onMouseMove = (e: MouseEvent) => {
+        if (!dragStartRef.current) return
+        const rect = map.getContainer().getBoundingClientRect()
+        const cx = e.clientX - rect.left
+        const cy = e.clientY - rect.top
+        const sx = dragStartRef.current.x
+        const sy = dragStartRef.current.y
+        boxDiv.style.left = Math.min(sx, cx) + 'px'
+        boxDiv.style.top = Math.min(sy, cy) + 'px'
+        boxDiv.style.width = Math.abs(cx - sx) + 'px'
+        boxDiv.style.height = Math.abs(cy - sy) + 'px'
+      }
+
+      const onMouseUp = (e: MouseEvent) => {
+        if (!dragStartRef.current) return
+        const rect = map.getContainer().getBoundingClientRect()
+        const ex = e.clientX - rect.left
+        const ey = e.clientY - rect.top
+        const sx = dragStartRef.current.x
+        const sy = dragStartRef.current.y
+
+        if (Math.abs(ex - sx) > 10 && Math.abs(ey - sy) > 10) {
+          const p1 = map.containerPointToLatLng([Math.min(sx, ex), Math.min(sy, ey)])
+          const p2 = map.containerPointToLatLng([Math.max(sx, ex), Math.max(sy, ey)])
+          const bounds = L!.latLngBounds(p1, p2)
+          map.fitBounds(bounds, { padding: [20, 20], maxZoom: 18 })
+          onDragZoomEnd?.()
+          if (dragDivRef.current) { dragDivRef.current.remove(); dragDivRef.current = null }
+          map.dragging.enable()
+          map.doubleClickZoom.enable()
+          map.getContainer().style.cursor = ''
+        } else {
+          boxDiv.style.display = 'none'
+        }
+        dragStartRef.current = null
+      }
+
+      const container = map.getContainer()
+      container.addEventListener('mousedown', onMouseDown)
+      container.addEventListener('mousemove', onMouseMove)
+      container.addEventListener('mouseup', onMouseUp)
+
+      return () => {
+        container.removeEventListener('mousedown', onMouseDown)
+        container.removeEventListener('mousemove', onMouseMove)
+        container.removeEventListener('mouseup', onMouseUp)
+        if (overlayDiv.parentNode) overlayDiv.parentNode.removeChild(overlayDiv)
+        dragDivRef.current = null
+        dragBoxElRef.current = null
+        map.dragging.enable()
+        map.doubleClickZoom.enable()
+        map.getContainer().style.cursor = ''
+      }
+    } else {
+      if (map.dragging && !map.dragging.enabled()) map.dragging.enable()
+      if (map.doubleClickZoom && !map.doubleClickZoom.enabled()) map.doubleClickZoom.enable()
+      map.getContainer().style.cursor = ''
+      if (dragDivRef.current) { dragDivRef.current.remove(); dragDivRef.current = null }
+      dragBoxElRef.current = null
+    }
+  }, [dragZoom, onDragZoomEnd])
 
   // Highlight selected point
   useEffect(() => {
@@ -385,7 +491,7 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
     }
   }, [points, selectedPoint])
 
-  // ── Finish drawing polygon (dipanggil dari tombol Finish atau dblclick) ──
+  // ── Finish drawing polygon ──
   const finishDrawing = useCallback(() => {
     const map = mapRef.current
     if (!map || !L) return
@@ -393,21 +499,17 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
     const vertices = drawVerticesRef.current
     if (vertices.length < 3) return
 
-    // Remove drawing line
     if (drawingRef.current) { map.removeLayer(drawingRef.current); drawingRef.current = null }
 
-    // Clear vertex markers
     for (const vm of vertexMarkersRef.current) {
       if (drawLayerRef.current) drawLayerRef.current.removeLayer(vm)
     }
     vertexMarkersRef.current = []
 
-    // Draw filled polygon
     const polygon = L!.polygon(vertices, {
       color: '#7c3aed', weight: 2, fillColor: '#8b5cf6', fillOpacity: 0.15,
     }).addTo(drawLayerRef.current)
 
-    // Find points inside polygon using ray casting (FIXED)
     const ids = new Set<string>()
     for (const p of pointsRef.current) {
       if (p.latitude === 0 && p.longitude === 0) continue
@@ -418,23 +520,20 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
 
     onAreaSelectedRef.current?.(ids)
 
-    // Reset drawing state
     drawVerticesRef.current = []
     setDrawing(false)
     setVertexCount(0)
   }, [])
 
-  // Store finishDrawing in ref for use inside event handler
   const finishDrawingRef = useRef(finishDrawing)
   useEffect(() => { finishDrawingRef.current = finishDrawing }, [finishDrawing])
 
-  // ── Polygon drawing ── FIX: dblclick disabled, pakai tombol Finish ──
+  // ── Polygon drawing ──
   useEffect(() => {
     const map = mapRef.current
     if (!map || !L) return
 
     if (drawMode) {
-      // FIX: disable dblclick zoom saat draw mode
       map.doubleClickZoom.disable()
       map.getContainer().style.cursor = 'crosshair'
 
@@ -443,10 +542,8 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
         const vertex: [number, number] = [latlng.lat, latlng.lng]
         drawVerticesRef.current.push(vertex)
 
-        // Remove old drawing line
         if (drawingRef.current) map.removeLayer(drawingRef.current)
 
-        // Draw line through all vertices + back to first
         if (drawVerticesRef.current.length >= 2) {
           const previewVerts = [...drawVerticesRef.current, drawVerticesRef.current[0]]
           drawingRef.current = L!.polyline(previewVerts, {
@@ -454,7 +551,6 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
           }).addTo(map)
         }
 
-        // Add vertex marker
         const vertexMarker = L!.circleMarker(vertex, {
           radius: 5, fillColor: '#8b5cf6', color: '#fff', weight: 2, fillOpacity: 1,
         }).addTo(drawLayerRef.current)
@@ -464,11 +560,9 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
         setVertexCount(drawVerticesRef.current.length)
       }
 
-      // FIX: dblclick hanya untuk finish, tidak zoom
       const onDblClick = (e: any) => {
         L!.DomEvent.stopPropagation(e)
         L!.DomEvent.preventDefault(e)
-        // Hapus vertex terakhir yang ke-duplicate dari click kedua
         if (drawVerticesRef.current.length > 3) {
           drawVerticesRef.current.pop()
           const lastVm = vertexMarkersRef.current.pop()
@@ -484,7 +578,7 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
       return () => {
         map.off('click', onClick)
         map.off('dblclick', onDblClick)
-        map.doubleClickZoom.enable() // FIX: restore dblclick zoom
+        map.doubleClickZoom.enable()
         map.getContainer().style.cursor = ''
         if (drawingRef.current) { map.removeLayer(drawingRef.current); drawingRef.current = null }
         for (const vm of vertexMarkersRef.current) {
@@ -531,6 +625,14 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
     <div className="absolute inset-0">
       <div ref={containerRef} className="w-full h-full" />
 
+      {/* Drag Zoom Banner */}
+      {dragZoom && (
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-[1002] bg-violet-500 text-white px-4 py-2 rounded-full shadow-lg text-xs font-semibold flex items-center gap-2 animate-pulse">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 2v6H2"/><path d="M2 6h16a4 4 0 0 1 0 8H6"/><path d="M18 22v-6h4"/><path d="M22 18H6a4 4 0 0 1 0-8h16"/></svg>
+          Drag di peta untuk zoom ke area. Tekan Esc untuk keluar.
+        </div>
+      )}
+
       {/* Draw mode overlay */}
       {drawMode && !selectedAreaIds && (
         <div className="absolute top-16 left-1/2 -translate-x-1/2 z-[1001] bg-violet-500 text-white px-4 py-2 rounded-full shadow-lg text-xs font-semibold flex items-center gap-2">
@@ -538,7 +640,7 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
         </div>
       )}
 
-      {/* FIX: Tombol Finish polygon */}
+      {/* Tombol Finish polygon */}
       {drawMode && drawing && vertexCount >= 3 && !selectedAreaIds && (
         <button
           onClick={finishDrawing}
