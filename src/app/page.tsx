@@ -392,7 +392,7 @@ export default function Home() {
           />
 
           {selectedPoint && (
-            <div className="hidden md:block absolute right-0 top-0 h-full z-[999]">
+            <div className="hidden md:block absolute right-0 top-16 h-[calc(100%-4rem)] z-[999]">
               <ODPDetailPanel point={selectedPoint} columns={columns} markerConfig={markerConfig} onClose={() => setSelectedPoint(null)} />
             </div>
           )}
