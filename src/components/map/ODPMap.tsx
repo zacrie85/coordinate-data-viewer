@@ -215,7 +215,7 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
         const map = leaflet.map(containerRef.current, {
           center: [-2.5, 118], zoom: 5, zoomControl: false, preferCanvas: true,
         })
-        leaflet.control.zoom({ position: 'topright' }).addTo(map)
+        // Zoom default Leaflet dihapus — pakai tombol custom di bawah
         leaflet.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
           attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>',
           maxZoom: 19,
@@ -238,7 +238,7 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
               font-family: system-ui, -apple-system, sans-serif !important;
               padding: 1px 3px !important;
               white-space: nowrap !important;
-              text-shadow: 1px 1px 2px white, -1px -1px 2px white, 1px -1px 2px white, -1px 1px 2px white !important;
+              text-shadow: 1px 1px 2px rgba(0,0,0,0.8), -1px -1px 2px rgba(0,0,0,0.8), 1px -1px 2px rgba(0,0,0,0.8), -1px 1px 2px rgba(0,0,0,0.8), 0 0 4px rgba(0,0,0,0.6) !important;
             }
             .odp-marker-label::before { display: none !important; }
           `
@@ -380,28 +380,42 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
     <div className="absolute inset-0">
       <div ref={containerRef} className="w-full h-full" />
 
-      {/* Drag Zoom Button */}
-      <button
-        onClick={toggleDragZoom}
-        className={`absolute top-[85px] right-4 z-[1001] h-9 w-9 rounded-lg shadow-lg flex items-center justify-center transition-colors ${
-          dragZoomActive
-            ? 'bg-violet-500 text-white hover:bg-violet-600'
-            : 'bg-white text-slate-700 hover:bg-violet-50 hover:text-violet-600'
-        }`}
-        title={dragZoomActive ? 'Keluar mode Drag Zoom (Esc)' : 'Drag Zoom - Drag area di peta untuk zoom'}
-      >
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="11" cy="11" r="8" />
-          <line x1="21" y1="21" x2="16.65" y2="16.65" />
-          <line x1="11" y1="8" x2="11" y2="14" />
-          <line x1="8" y1="11" x2="14" y2="11" />
-        </svg>
-      </button>
+      {/* Zoom Controls — Bottom Right */}
+      <div className="absolute bottom-4 right-4 z-[1000] flex flex-col gap-1.5">
+        <button
+          onClick={() => mapRef.current?.zoomIn()}
+          className="h-9 w-9 bg-white rounded-lg shadow-lg flex items-center justify-center text-slate-700 hover:bg-slate-50 transition-colors"
+          title="Zoom In"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        </button>
+        <button
+          onClick={() => mapRef.current?.zoomOut()}
+          className="h-9 w-9 bg-white rounded-lg shadow-lg flex items-center justify-center text-slate-700 hover:bg-slate-50 transition-colors"
+          title="Zoom Out"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        </button>
+        <div className="w-full h-px bg-slate-200 my-0.5" />
+        <button
+          onClick={toggleDragZoom}
+          className={`h-9 w-9 rounded-lg shadow-lg flex items-center justify-center transition-colors ${
+            dragZoomActive
+              ? 'bg-violet-500 text-white hover:bg-violet-600'
+              : 'bg-white text-slate-700 hover:bg-violet-50 hover:text-violet-600'
+          }`}
+          title={dragZoomActive ? 'Keluar mode Drag Zoom (Esc)' : 'Drag Zoom'}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M6 2v6H2" /><path d="M2 6h16a4 4 0 0 1 0 8H6" /><path d="M18 22v-6h4" /><path d="M22 18H6a4 4 0 0 1 0-8h16" />
+          </svg>
+        </button>
+      </div>
 
       {/* Drag Zoom Info Banner */}
       {dragZoomActive && (
         <div className="absolute top-16 left-1/2 -translate-x-1/2 z-[1002] bg-violet-500 text-white px-4 py-2 rounded-full shadow-lg text-xs font-semibold flex items-center gap-2 animate-pulse">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 2v6H2"/><path d="M2 6h16a4 4 0 0 1 0 8H6"/><path d="M18 22v-6h4"/><path d="M22 18H6a4 4 0 0 1 0-8h16"/></svg>
           Drag di peta untuk zoom ke area. Tekan Esc untuk keluar.
         </div>
       )}
