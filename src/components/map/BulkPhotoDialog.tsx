@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useCallback, useRef } from 'react'
-import { X, Upload, Image, Check, AlertCircle, Loader2, Camera, MapPin, FolderSearch } from 'lucide-react'
+import { useState, useCallback, useRef, useEffect } from 'react'
+import { X, Upload, Image, Check, AlertCircle, Loader2, Camera, MapPin, FolderSearch, ChevronDown } from 'lucide-react'
 import { toast } from 'sonner'
 import { createClient } from '@supabase/supabase-js'
 
@@ -50,14 +50,12 @@ async function uploadOneFile(file: File, pointId: string) {
   const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg'
   const fid = crypto.randomUUID?.() || ('xxxx-xxxx-xxxx'.replace(/x/g, () => Math.floor(Math.random() * 16).toString(16)))
 
-  // Upload original
   const origPath = `${pointId}/${fid}.${ext}`
   const { error: err1 } = await supabase.storage.from('odp-photos').upload(origPath, file, { upsert: true })
   if (err1) throw new Error(`Storage: ${err1.message}`)
   const { data: ud } = supabase.storage.from('odp-photos').getPublicUrl(origPath)
   const url = ud.publicUrl
 
-  // Upload thumbnail
   let thumbUrl: string | null = null
   try {
     const tb = await makeThumb(file)
@@ -66,10 +64,8 @@ async function uploadOneFile(file: File, pointId: string) {
     if (!err2) { const { data: td } = supabase.storage.from('odp-photos').getPublicUrl(thumbPath); thumbUrl = td.publicUrl }
   } catch (e) { console.warn('thumb:', e) }
 
-  // Get dimensions
   const { w, h } = await getImgSize(file)
 
-  // Save metadata via API
   const r = await fetch('/api/photos', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ pointId, fileName: file.name, fileSize: file.size, url, thumbUrl, width: w, height: h, mimeType: file.type }),
@@ -92,13 +88,29 @@ export default function BulkPhotoDialog({
   const [uploadProgress, setUploadProgress] = useState('')
   const [uploadResults, setUploadResults] = useState<{ success: boolean; fileName: string; error?: string }[]>([])
   const [step, setStep] = useState<'select' | 'match' | 'upload' | 'done'>('select')
+  const [colOpen, setColOpen] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const dropRef = useRef<HTMLDivElement>(null)
+  const colRef = useRef<HTMLDivElement>(null)
 
   const nameCol = matchColumn || markerConfig.nameCol1 || markerConfig.nameCol2 || ''
 
+  useEffect(() => {
+    if (!matchColumn && (markerConfig.nameCol1 || markerConfig.nameCol2)) {
+      setMatchColumn(markerConfig.nameCol1 || markerConfig.nameCol2)
+    }
+  }, [markerConfig.nameCol1, markerConfig.nameCol2, matchColumn])
+
+  useEffect(() => {
+    const h = (e: MouseEvent) => { if (colRef.current && !colRef.current.contains(e.target as Node)) setColOpen(false) }
+    document.addEventListener('mousedown', h); return () => document.removeEventListener('mousedown', h)
+  }, [])
+
   const handleOpen = useCallback((v: boolean) => {
-    if (!v) { setFiles([]); setMatches([]); setUnmatched([]); setStep('select'); setUploadResults([]); setUploadProgress(''); setMode(selectedAreaIds && selectedAreaIds.size > 0 ? 'area' : 'dragdrop') }
+    if (!v) {
+      setFiles([]); setMatches([]); setUnmatched([]); setStep('select'); setUploadResults([])
+      setUploadProgress(''); setMode(selectedAreaIds && selectedAreaIds.size > 0 ? 'area' : 'dragdrop')
+    }
     onOpenChange(v)
   }, [onOpenChange, selectedAreaIds])
 
@@ -107,11 +119,11 @@ export default function BulkPhotoDialog({
     e.preventDefault(); e.stopPropagation()
     const dropped = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/') || f.name.match(/\.(jpg|jpeg|png|webp|heic|heif)$/i))
     if (dropped.length === 0) { toast.error('Hanya file gambar (JPG, PNG, WebP)'); return }
-    setFiles(prev => [...prev, ...dropped]); setStep('match')
+    setFiles(prev => [...prev, ...dropped])
   }, [])
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const selected = Array.from(e.target.files || [])
-    if (selected.length > 0) { setFiles(prev => [...prev, ...selected]); setStep('match') }
+    if (selected.length > 0) { setFiles(prev => [...prev, ...selected]) }
     e.target.value = ''
   }, [])
 
@@ -123,12 +135,13 @@ export default function BulkPhotoDialog({
       const params = new URLSearchParams({ fileNames, nameCol })
       const res = await fetch(`/api/photos/bulk-match?${params}`)
       const data = await res.json()
-      setMatches(data.matches || []); setUnmatched(data.unmatched || [])
+      setMatches(data.matches || [])
+      setUnmatched(data.unmatched || [])
+      setStep('match')
       if (data.stats) toast.info(`Match: ${data.stats.matched} cocok, ${data.stats.unmatched} tidak cocok`)
     } catch { toast.error('Gagal matching') } finally { setMatching(false) }
   }, [files, nameCol])
 
-  // Upload semua matched files (client-side)
   const doUpload = useCallback(async () => {
     if (matches.length === 0) return
     setUploading(true); setStep('upload'); setUploadResults([])
@@ -152,7 +165,6 @@ export default function BulkPhotoDialog({
     toast.success(`${ok} berhasil${fail > 0 ? `, ${fail} gagal` : ''}`)
   }, [matches, files])
 
-  // Area upload
   const doAreaUpload = useCallback(async (areaFiles: File[]) => {
     if (!areaPoints || areaPoints.length === 0 || areaFiles.length === 0) return
     setUploading(true); setStep('upload'); setUploadResults([])
@@ -169,7 +181,7 @@ export default function BulkPhotoDialog({
         }
         if (matched) break
       }
-      if (!matched) { results.push({ success: false, fileName: file.name, error: 'Tidak cocok' }); continue }
+      if (!matched) { results.push({ success: false, fileName: file.name, error: 'Tidak cocok dengan ODP di area' }); continue }
       try {
         await uploadOneFile(file, matched.id)
         results.push({ success: true, fileName: file.name })
@@ -216,9 +228,10 @@ export default function BulkPhotoDialog({
                     <div className="w-16 h-16 rounded-2xl bg-slate-100 flex items-center justify-center mx-auto mb-4"><Image className="w-8 h-8 text-slate-400" /></div>
                     <p className="text-sm font-semibold text-slate-600 mb-1">Drag & drop foto di sini</p>
                     <p className="text-xs text-slate-400 mb-3">atau klik untuk pilih file</p>
-                    <p className="text-[10px] text-slate-300">JPG, PNG, WebP • Maks 10MB per file • Nama file harus cocok dengan nama ODP</p>
+                    <p className="text-[10px] text-slate-300">JPG, PNG, WebP • Nama file harus cocok dengan nama ODP</p>
                   </div>
                   <input ref={fileInputRef} type="file" multiple accept="image/*" onChange={handleFileSelect} className="hidden" />
+
                   {files.length > 0 && (
                     <div className="mt-4">
                       <div className="flex items-center justify-between mb-2">
@@ -234,6 +247,23 @@ export default function BulkPhotoDialog({
                           </div>
                         ))}
                       </div>
+
+                      <div className="mt-3 relative" ref={colRef}>
+                        <label className="block text-[11px] font-semibold text-slate-500 mb-1">Kolom nama ODP untuk matching:</label>
+                        <button type="button" onClick={() => setColOpen(!colOpen)} className="w-full flex items-center justify-between px-3 py-2 text-xs bg-white border border-slate-200 rounded-lg hover:border-violet-300 transition-colors">
+                          <span className={nameCol ? 'text-slate-700' : 'text-slate-400'}>{nameCol || 'Semua kolom (auto)'}</span>
+                          <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform ${colOpen ? 'rotate-180' : ''}`} />
+                        </button>
+                        {colOpen && (
+                          <div className="absolute z-10 mt-1 w-full max-h-40 overflow-y-auto bg-white border border-slate-200 rounded-lg shadow-lg">
+                            <button type="button" onClick={() => { setMatchColumn(''); setColOpen(false) }} className={`w-full text-left px-3 py-2 text-xs hover:bg-violet-50 transition-colors ${!matchColumn ? 'bg-violet-50 text-violet-700 font-semibold' : 'text-slate-600'}`}>Semua kolom (auto-detect)</button>
+                            {columns.map(col => (
+                              <button key={col} type="button" onClick={() => { setMatchColumn(col); setColOpen(false) }} className={`w-full text-left px-3 py-2 text-xs hover:bg-violet-50 transition-colors ${matchColumn === col ? 'bg-violet-50 text-violet-700 font-semibold' : 'text-slate-600'}`}>{col}</button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
                       <button onClick={doMatch} disabled={matching} className="mt-3 w-full py-2.5 bg-violet-500 text-white rounded-xl text-sm font-semibold hover:bg-violet-600 disabled:opacity-50 flex items-center justify-center gap-2">
                         {matching ? <><Loader2 className="w-4 h-4 animate-spin" /> Matching...</> : <><FolderSearch className="w-4 h-4" /> Auto-Match ke ODP</>}
                       </button>
@@ -248,7 +278,7 @@ export default function BulkPhotoDialog({
                     <div className="w-16 h-16 rounded-2xl bg-emerald-100 flex items-center justify-center mx-auto mb-4"><MapPin className="w-8 h-8 text-emerald-500" /></div>
                     <p className="text-sm font-semibold text-slate-600 mb-1">Upload foto untuk {selectedAreaIds?.size || 0} ODP terpilih</p>
                     <p className="text-xs text-slate-400 mb-3">Nama file akan di-auto-match ke nama ODP di area</p>
-                    <p className="text-[10px] text-slate-300">Contoh: ODP-001.jpg → cocok ke ODP dengan nama &quot;ODP-001&quot;</p>
+                    <p className="text-[10px] text-slate-300">Contoh: KWR10.01-A02.jpg → cocok ke ODP &quot;KWR10.01-A02&quot;</p>
                   </div>
                   <input ref={fileInputRef} type="file" multiple accept="image/*" onChange={(e) => { const s = Array.from(e.target.files || []); if (s.length > 0) { setFiles(s); doAreaUpload(s) } e.target.value = '' }} className="hidden" />
                 </div>
