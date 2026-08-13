@@ -520,6 +520,18 @@ export default function FilterSidebar({
                       </select>
                     </div>
                   </div>
+                  <div>
+                    <label className="text-[10px] text-slate-500 mb-0.5 flex items-center gap-1">
+                      Label Teks di Peta
+                      <span className="text-[9px] bg-violet-100 text-violet-600 px-1.5 py-0.5 rounded font-semibold">NEW</span>
+                    </label>
+                    <select className="w-full h-7 px-2 text-[11px] border border-violet-200 rounded bg-violet-50/50 focus:outline-none focus:ring-1 focus:ring-violet-500/30 text-violet-800 font-medium"
+                      value={markerConfig.labelCol} onChange={e => onMarkerConfigChange({ ...markerConfig, labelCol: e.target.value })}>
+                      <option value="">-- Tidak tampilkan --</option>
+                      {columns.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                    <p className="text-[9px] text-slate-400 mt-0.5">Kolom yang ditampilkan sebagai label teks di setiap titik marker</p>
+                  </div>
                 </div>
               </details>
             </div>

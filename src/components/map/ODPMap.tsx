@@ -89,16 +89,12 @@ function statusColor(val: string): string {
 }
 
 function getPointLabel(meta: Record<string, any>, mc: MarkerConfig): string {
-  if (mc.nameCol2) {
-    const v = String(meta[mc.nameCol2] || '').trim()
+  // Pakai labelCol jika dipilih manual
+  if (mc.labelCol) {
+    const v = String(meta[mc.labelCol] || '').trim()
     if (v) return v
   }
-  if (mc.nameCol1) {
-    const v = String(meta[mc.nameCol1] || '').trim()
-    if (v) return v
-  }
-  const first = Object.entries(meta).find(([, v]) => v && v !== '')
-  return first ? String(first[1]).substring(0, 30) : 'Point'
+  return ''
 }
 
 export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, columns, markerConfig, drawMode, onAreaSelected, selectedAreaIds }: MapViewProps) {
@@ -150,7 +146,7 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
           link2.setAttribute('data-cluster-css', 'true'); document.head.appendChild(link2)
           await new Promise(r => setTimeout(r, 50))
         }
-        // Inject CSS for permanent map labels — di luar blok cluster CSS
+        // Inject CSS for permanent map labels
         if (!document.querySelector('style[data-odp-label]')) {
           const style = document.createElement('style')
           style.setAttribute('data-odp-label', 'true')
@@ -169,7 +165,7 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
             }
             .odp-map-label::before { display: none !important; }
           `
-                    document.head.appendChild(style)
+          document.head.appendChild(style)
         }
         if (destroyed || !containerRef.current) return
 

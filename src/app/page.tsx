@@ -30,9 +30,10 @@ export interface MarkerConfig {
   capacityCol: string
   activeCol: string
   availCol: string
+  labelCol: string
 }
 
-const DEFAULT_MC: MarkerConfig = { nameCol1: '', nameCol2: '', capacityCol: '', activeCol: '', availCol: '' }
+const DEFAULT_MC: MarkerConfig = { nameCol1: '', nameCol2: '', capacityCol: '', activeCol: '', availCol: '', labelCol: '' }
 
 // ── AUTO-DETECT: scan kolom Excel dan cocokkan berdasarkan pola nama ──
 
@@ -69,6 +70,9 @@ function autoDetectConfig(cols: string[]): MarkerConfig {
   for (let i = 0; i < cols.length; i++) {
     if (!usedCols.has(cols[i]) && cols[i] !== mc.nameCol1 && NAME2_PATTERNS.test(lower[i])) { mc.nameCol2 = cols[i]; break }
   }
+
+  // labelCol default = nameCol2 (Code column)
+  mc.labelCol = mc.nameCol2 || mc.nameCol1 || ''
 
   return mc
 }
