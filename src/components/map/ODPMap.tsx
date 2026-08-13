@@ -383,7 +383,7 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
       {/* Drag Zoom Button */}
       <button
         onClick={toggleDragZoom}
-        className={`absolute top-4 right-16 z-[1001] h-9 w-9 rounded-lg shadow-lg flex items-center justify-center transition-colors ${
+        className={`absolute top-[85px] right-4 z-[1001] h-9 w-9 rounded-lg shadow-lg flex items-center justify-center transition-colors ${
           dragZoomActive
             ? 'bg-violet-500 text-white hover:bg-violet-600'
             : 'bg-white text-slate-700 hover:bg-violet-50 hover:text-violet-600'
