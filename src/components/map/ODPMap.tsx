@@ -29,6 +29,7 @@ export interface MarkerConfig {
   capacityCol: string
   labelCol1: string
   labelCol2: string
+  labelCol: string
 }
 
 interface MapViewProps {
@@ -245,19 +246,6 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
           document.head.appendChild(style)
         }
 
-        // Tampilkan/sembunyikan label berdasarkan zoom
-        map.on('zoomend', () => {
-          const zoom = map.getZoom()
-          const showLabels = zoom >= 13
-          layerGroup.eachLayer((layer: any) => {
-            if (layer.getTooltip()) {
-              const tooltip = layer.getTooltip()
-              const el = tooltip.getElement()
-              if (el) el.style.display = showLabels ? '' : 'none'
-            }
-          })
-        })
-
         if (!destroyed) { mapRef.current = map; layerGroupRef.current = layerGroup; setMapReady(true) }
       } catch (err) {
         console.error('Map init error:', err)
@@ -272,14 +260,10 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
   }, [])
 
   // Extract code label from point
-  const getCodeLabel = (point: DataPoint): string => {
+    const getCodeLabel = (point: DataPoint): string => {
     const meta = point.metadata || {}
-    if (markerConfig?.labelCol1 && meta[markerConfig.labelCol1]) {
-      return String(meta[markerConfig.labelCol1])
-    }
-    for (const col of columns) {
-      const val = String(meta[col] || '')
-      if (/^[A-Z]{2,4}\.[0-9]{2}-[A-Z]?[0-9]{2,3}$/i.test(val.trim())) return val.trim()
+    if (markerConfig?.labelCol && meta[markerConfig.labelCol]) {
+      return String(meta[markerConfig.labelCol]).substring(0, 25)
     }
     return ''
   }
