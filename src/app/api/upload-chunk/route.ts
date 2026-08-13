@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { Prisma } from '@prisma/client'
 
 // ── Coordinate auto-detection ──
 
@@ -7,12 +8,10 @@ function parseCoordValue(val: any): [number, number] | null {
   if (val === null || val === undefined || val === '') return null
   const s = String(val).trim()
   if (!s) return null
-  // Comma-separated: "-6.242,106.446"
   if (s.includes(',')) {
     const parts = s.split(',').map(p => parseFloat(p.trim()))
     if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) return [parts[0], parts[1]]
   }
-  // Space-separated
   if (s.includes(' ')) {
     const parts = s.split(/\s+/).map(p => parseFloat(p.trim()))
     if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) return [parts[0], parts[1]]
@@ -35,18 +34,15 @@ function extractCoordinates(
   row: Record<string, any>,
   det: { latCol: string | null; lngCol: string | null; coordCol: string | null }
 ): { latitude: number; longitude: number } {
-  // Priority 1: Separate lat/lng columns
   if (det.latCol && det.lngCol) {
     const lat = parseFloat(row[det.latCol])
     const lng = parseFloat(row[det.lngCol])
     if (!isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0) return { latitude: lat, longitude: lng }
   }
-  // Priority 2: Combined coordinate column
   if (det.coordCol) {
     const parsed = parseCoordValue(row[det.coordCol])
     if (parsed && parsed[0] !== 0 && parsed[1] !== 0) return { latitude: parsed[0], longitude: parsed[1] }
   }
-  // Priority 3: Scan ALL columns for coord pair
   for (const [, val] of Object.entries(row)) {
     const parsed = parseCoordValue(val)
     if (parsed && parsed[0] !== 0 && parsed[1] !== 0) return { latitude: parsed[0], longitude: parsed[1] }
@@ -70,14 +66,12 @@ function buildMetadata(
   return meta
 }
 
-// Using Prisma createMany instead of raw SQL — safe with PgBouncer and handles all escaping
-
 // ── Main handler ──
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const { action, datasetId, headers, rows, chunkIndex, totalChunks, detection, datasetName } = body
+    const { action, datasetId, headers, rows, detection, datasetName } = body
 
     // ── CREATE DATASET ──
     if (action === 'create-dataset') {
@@ -118,7 +112,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true })
     }
 
-    // ── INSERT CHUNK ──
+    // ── INSERT CHUNK (untuk dataset baru) ──
     if (action === 'insert') {
       if (!datasetId || !Array.isArray(rows)) {
         return NextResponse.json({ error: 'datasetId dan rows wajib' }, { status: 400 })
@@ -135,19 +129,111 @@ export async function POST(req: NextRequest) {
       })
 
       if (processed.length === 0) {
-        return NextResponse.json({ chunkIndex, totalChunks, inserted: 0, skipped: rows.length })
+        return NextResponse.json({ chunkIndex: body.chunkIndex, totalChunks: body.totalChunks, inserted: 0, skipped: rows.length })
       }
 
       await db.dataPoint.createMany({
-        data: processed.map(r => ({
-          datasetId,
-          latitude: r.latitude,
-          longitude: r.longitude,
-          metadata: r.metadata,
-        })),
+        data: processed.map(r => ({ datasetId, latitude: r.latitude, longitude: r.longitude, metadata: r.metadata })),
       })
 
-      return NextResponse.json({ chunkIndex, totalChunks, inserted: processed.length, skipped: rows.length - processed.length })
+      return NextResponse.json({ chunkIndex: body.chunkIndex, totalChunks: body.totalChunks, inserted: processed.length, skipped: rows.length - processed.length })
+    }
+
+    // ── UPDATE DATASET (update-in-place, foto tetap nyambung) ──
+    if (action === 'update-dataset') {
+      const { keyCol, rows: allRows } = body
+      if (!datasetId || !keyCol || !Array.isArray(allRows)) {
+        return NextResponse.json({ error: 'datasetId, keyCol, dan rows wajib' }, { status: 400 })
+      }
+
+      const det: { latCol: string | null; lngCol: string | null; coordCol: string | null } = detection || { latCol: null, lngCol: null, coordCol: null }
+
+      // 1. Ambil semua DataPoint lama, index berdasarkan keyCol di metadata
+      const existingPoints = await db.dataPoint.findMany({
+        where: { datasetId },
+        select: { id: true, metadata: true },
+      })
+
+      const existingIndex = new Map<string, { id: string; meta: Record<string, any> }>()
+      for (const p of existingPoints) {
+        const meta = p.metadata as Record<string, any>
+        const keyValue = meta[keyCol]
+        if (keyValue !== undefined && keyValue !== null && String(keyValue).trim() !== '') {
+          const normalized = String(keyValue).trim().toLowerCase()
+          existingIndex.set(normalized, { id: p.id, meta })
+        }
+      }
+
+      // 2. Proses semua baris: update existing atau insert baru
+      let updated = 0
+      let inserted = 0
+      const processedIds = new Set<string>()
+      const BATCH_SIZE = 100
+
+      for (let i = 0; i < allRows.length; i += BATCH_SIZE) {
+        const batch = allRows.slice(i, i + BATCH_SIZE)
+        const ops: Prisma.PrismaPromise<any>[] = []
+
+        for (const row of batch) {
+          const { latitude, longitude } = extractCoordinates(row, det)
+          const metadata = buildMetadata(row, det)
+          const keyValue = row[keyCol]
+          const normalizedKey = keyValue !== undefined && keyValue !== null && String(keyValue).trim() !== ''
+            ? String(keyValue).trim().toLowerCase()
+            : ''
+
+          if (normalizedKey && existingIndex.has(normalizedKey)) {
+            // UPDATE: ID tetap sama → foto tetap nyambung
+            const existing = existingIndex.get(normalizedKey)!
+            processedIds.add(existing.id)
+            ops.push(db.dataPoint.update({
+              where: { id: existing.id },
+              data: { latitude, longitude, metadata },
+            }))
+            updated++
+          } else {
+            // INSERT: DataPoint baru
+            ops.push(db.dataPoint.create({
+              data: { datasetId, latitude, longitude, metadata },
+            }))
+            inserted++
+          }
+        }
+
+        await Promise.all(ops)
+      }
+
+      // 3. Hitung yang tidak ada di file baru
+      const removedCount = existingPoints.length - processedIds.size
+
+      // 4. Update dataset info
+      await db.dataset.update({
+        where: { id: datasetId },
+        data: {
+          headers: headers || [],
+          latCol: det.latCol,
+          lngCol: det.lngCol,
+          coordCol: det.coordCol,
+          rowCount: allRows.length,
+        },
+      })
+
+      return NextResponse.json({ updated, inserted, removed: removedCount, totalRows: allRows.length, existingTotal: existingPoints.length })
+    }
+
+    // ── GET ACTIVE DATASET INFO (untuk update mode) ──
+    if (action === 'get-active-dataset') {
+      const active = await db.dataset.findFirst({
+        where: { isActive: true },
+        select: { id: true, name: true, headers: true, rowCount: true },
+      })
+      if (!active) {
+        return NextResponse.json({ error: 'Tidak ada dataset aktif' }, { status: 404 })
+      }
+      const photoCount = await db.photo.count({
+        where: { point: { datasetId: active.id } },
+      })
+      return NextResponse.json({ ...active, photoCount })
     }
 
     // ── MANUAL DETECTION (for preview) ──
