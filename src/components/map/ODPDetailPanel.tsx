@@ -74,8 +74,8 @@ export default function ODPDetailPanel({ point, columns, markerConfig, onClose }
   const activeVal = markerConfig.activeCol ? String(meta[markerConfig.activeCol] || '') : ''
   const availVal = markerConfig.availCol ? String(meta[markerConfig.availCol] || '') : ''
 
-  // Skip columns from metadata list
-  const skipCols = new Set<string>([markerConfig.nameCol1, markerConfig.nameCol2, markerConfig.capacityCol, markerConfig.activeCol, markerConfig.availCol].filter(Boolean))
+  // Skip columns from metadata list — nameCol2 (Code) tetap ditampilkan
+  const skipCols = new Set<string>([markerConfig.nameCol1, markerConfig.capacityCol, markerConfig.activeCol, markerConfig.availCol].filter(Boolean))
   const otherCols = columns.filter(c => !skipCols.has(c))
 
   return (

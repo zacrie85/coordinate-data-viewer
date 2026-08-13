@@ -150,6 +150,27 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
           link2.setAttribute('data-cluster-css', 'true'); document.head.appendChild(link2)
           await new Promise(r => setTimeout(r, 50))
         }
+        // Inject CSS for permanent map labels — di luar blok cluster CSS
+        if (!document.querySelector('style[data-odp-label]')) {
+          const style = document.createElement('style')
+          style.setAttribute('data-odp-label', 'true')
+          style.textContent = `
+            .odp-map-label {
+              background: transparent !important;
+              border: none !important;
+              box-shadow: none !important;
+              color: #1e293b !important;
+              font-size: 10px !important;
+              font-weight: 700 !important;
+              font-family: ui-monospace, monospace !important;
+              padding: 1px 3px !important;
+              text-shadow: 1px 1px 1px white, -1px -1px 1px white, 1px -1px 1px white, -1px 1px 1px white, 0 0 3px white !important;
+              white-space: nowrap !important;
+            }
+            .odp-map-label::before { display: none !important; }
+          `
+                    document.head.appendChild(style)
+        }
         if (destroyed || !containerRef.current) return
 
         const renderer = leaflet.canvas({ padding: 0.5 })
@@ -288,6 +309,16 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
           fillOpacity: isSelected ? 0.9 : (isInArea ? 0.2 : 0.75),
         })
         marker.bindPopup(popupFn(point), { maxWidth: 340, minWidth: 260 })
+        // Permanent label: tampilkan nilai kolom Code/nameCol2
+        const label = getPointLabel(point.metadata || {}, mc)
+        if (label) {
+          marker.bindTooltip(label.substring(0, 25), {
+            permanent: true,
+            direction: 'right',
+            className: 'odp-map-label',
+            offset: [6, -1],
+          })
+        }
         marker.on('click', () => stableSelect(point))
         cluster.addLayer(marker)
         markersRef.current.set(point.id, marker)
