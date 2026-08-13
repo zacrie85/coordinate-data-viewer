@@ -103,6 +103,9 @@ export default function Home() {
   const [drawMode, setDrawMode] = useState(false)
   const [selectedAreaIds, setSelectedAreaIds] = useState<Set<string> | null>(null)
 
+  // Drag Zoom state
+  const [dragZoom, setDragZoom] = useState(false)
+
   const loadColumns = useCallback(() => {
     fetch('/api/data/columns').then(r => r.json()).then((d: ColumnInfo) => {
       const cols = d.columns || []
@@ -340,6 +343,19 @@ export default function Home() {
           {/* Top-right action buttons */}
           {stats && stats.total > 0 && (
             <div className="absolute top-4 right-4 z-[1000] flex items-center gap-2">
+              {/* Drag Zoom */}
+              <button
+                className={`h-9 px-3 rounded-lg shadow-lg flex items-center gap-2 font-medium text-xs transition-colors ${dragZoom ? 'bg-violet-500 text-white hover:bg-violet-600' : 'bg-white text-violet-600 hover:bg-violet-50'}`}
+                onClick={() => setDragZoom(!dragZoom)}
+                title={dragZoom ? 'Keluar Drag Zoom (Esc)' : 'Drag Zoom'}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="11" cy="11" r="8"/>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                  <rect x="7" y="7" width="8" height="8" rx="1" stroke-dasharray="3 2"/>
+                </svg>
+                <span className="hidden sm:inline">{dragZoom ? 'Zooming...' : 'Drag Zoom'}</span>
+              </button>
               <button className="h-9 px-3 bg-white rounded-lg shadow-lg flex items-center gap-2 hover:bg-emerald-50 text-emerald-600 font-medium text-xs transition-colors" onClick={handleExportCsv}>
                 <FileDown className="w-4 h-4" /><span className="hidden sm:inline">CSV</span>
               </button>
@@ -393,6 +409,8 @@ export default function Home() {
             drawMode={drawMode}
             onAreaSelected={handleAreaSelected}
             selectedAreaIds={selectedAreaIds}
+            dragZoom={dragZoom}
+            onDragZoomEnd={() => setDragZoom(false)}
           />
 
           {selectedPoint && (
