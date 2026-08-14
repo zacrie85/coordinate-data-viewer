@@ -192,6 +192,16 @@ function buildGroupFolders(items: any[], fields: string[], mc: any, photoMap: Ma
   return xml
 }
 
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Cache-Control',
+}
+
+export async function OPTIONS() {
+  return new NextResponse(null, { headers: corsHeaders })
+}
+
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const search = searchParams.get('search') || ''
@@ -233,7 +243,7 @@ export async function GET(req: NextRequest) {
     const active = await db.dataset.findFirst({ where: { isActive: true } })
     if (!active) {
       return new NextResponse(`<?xml version="1.0" encoding="UTF-8"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>Belum Ada Data</name><description>Upload file Excel terlebih dahulu.</description></Document></kml>`,
-        { headers: { 'Content-Type': 'application/vnd.google-earth.kml+xml', 'Cache-Control': 'no-cache' } })
+        { headers: { 'Content-Type': 'application/vnd.google-earth.kml+xml', 'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*' } })
     }
 
     const where: Prisma.DataPointWhereInput = { datasetId: active.id, latitude: { not: 0 }, longitude: { not: 0 } }
@@ -290,7 +300,12 @@ export async function GET(req: NextRequest) {
     const kml = `<?xml version="1.0" encoding="UTF-8"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>${escapeXml(active.name)}</name><description>${escapeXml(active.name)} - ${points.length} titik</description>${styles}${foldersXml}</Document></kml>`
 
     return new NextResponse(kml, {
-      headers: { 'Content-Type': 'application/vnd.google-earth.kml+xml', 'Cache-Control': 'no-cache, no-store, must-revalidate' },
+      headers: {
+        'Content-Type': 'application/vnd.google-earth.kml+xml',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, OPTIONS',
+      },
     })
   } catch (error) {
     console.error('KML error:', error)
