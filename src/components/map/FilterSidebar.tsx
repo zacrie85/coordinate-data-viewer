@@ -423,7 +423,6 @@ export default function FilterSidebar({
             </div>
           )}
         </div>
-      </div>
 
         <hr className="border-slate-100" />
 
@@ -530,6 +529,7 @@ export default function FilterSidebar({
             </div>
           )}
         </div>
+      </div>
 
       {/* Footer */}
       {totalFilterCount > 0 && (
