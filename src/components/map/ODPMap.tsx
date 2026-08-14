@@ -140,11 +140,6 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
   const dragBoxElRef = useRef<HTMLDivElement | null>(null)
   useEffect(() => { dragZoomRef.current = !!dragZoom }, [dragZoom])
 
-  // ★ OPTIMASI: skip label sync saat zoom programatik (klik titik, fitBounds, drag zoom)
-  const skipLabelSyncRef = useRef(false)
-  // ★ OPTIMASI: throttle timer untuk label sync
-  const labelSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
   // Init map with clustering
   useEffect(() => {
     let destroyed = false
@@ -339,30 +334,22 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
   }, [mapReady, points, columns, stableSelect, selectedAreaIds])
 
   // ── Label dinamis: hanya tampil saat zoom >= 13 ──
-  // ★ OPTIMASI: throttle 500ms, skip clusters, max 300 labels, skip saat zoom programatik
   useEffect(() => {
     const map = mapRef.current
     const cluster = clusterRef.current
     if (!map || !cluster) return
 
     const LABEL_ZOOM = 13
-    const MAX_LABELS = 300
 
     const syncLabels = () => {
-      if (skipLabelSyncRef.current) return
       const zoom = map.getZoom()
       const show = zoom >= LABEL_ZOOM
       const mc = mcRef.current
-      let labelCount = 0
 
       cluster.eachLayer((layer: any) => {
-        // ★ OPTIMASI: skip cluster groups
         if (typeof layer.getChildCount === 'function') return
-
         const hasTooltip = !!layer.getTooltip()
         if (show && !hasTooltip) {
-          // ★ OPTIMASI: max labels cap
-          if (labelCount >= MAX_LABELS) return
           const meta = layer._pointMeta
           if (meta) {
             const label = getPointLabel(meta, mc)
@@ -370,7 +357,6 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
               layer.bindTooltip(label.substring(0, 25), {
                 permanent: true, direction: 'right', className: 'odp-map-label', offset: [6, -1],
               })
-              labelCount++
             }
           }
         } else if (!show && hasTooltip) {
@@ -379,17 +365,11 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
       })
     }
 
-    // ★ OPTIMASI: throttle - hanya jalankan max sekali per 500ms
-    const onZoomEnd = () => {
-      if (labelSyncTimerRef.current) clearTimeout(labelSyncTimerRef.current)
-      labelSyncTimerRef.current = setTimeout(syncLabels, 500)
-    }
+    map.on('zoomend', syncLabels)
+    const initTimer = setTimeout(syncLabels, 300)
 
-    map.on('zoomend', onZoomEnd)
-    const initTimer = setTimeout(syncLabels, 500)
-
-    return () => { map.off('zoomend', onZoomEnd); clearTimeout(initTimer); if (labelSyncTimerRef.current) clearTimeout(labelSyncTimerRef.current) }
-  }, [mapReady])
+    return () => { map.off('zoomend', syncLabels); clearTimeout(initTimer) }
+  }, [mapReady, markerConfig.labelCol])
 
   // Esc untuk keluar dari drag zoom
   useEffect(() => {
@@ -455,10 +435,7 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
           const p1 = map.containerPointToLatLng([Math.min(sx, ex), Math.min(sy, ey)])
           const p2 = map.containerPointToLatLng([Math.max(sx, ex), Math.max(sy, ey)])
           const bounds = L!.latLngBounds(p1, p2)
-          // ★ OPTIMASI: skip label sync selama drag zoom
-          skipLabelSyncRef.current = true
           map.fitBounds(bounds, { padding: [20, 20], maxZoom: 18 })
-          setTimeout(() => { skipLabelSyncRef.current = false }, 1000)
           onDragZoomEnd?.()
           if (dragDivRef.current) { dragDivRef.current.remove(); dragDivRef.current = null }
           map.dragging.enable()
@@ -496,43 +473,35 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
   }, [dragZoom, onDragZoomEnd])
 
   // Highlight selected point
-  // ★ OPTIMASI: skip label sync selama zoom otomatis ke titik
   useEffect(() => {
     if (!mapRef.current || !selectedPoint) return
     if (selectedPoint.latitude === 0 && selectedPoint.longitude === 0) return
     const marker = markersRef.current.get(selectedPoint.id)
     if (marker) {
-      skipLabelSyncRef.current = true
       mapRef.current.setView([selectedPoint.latitude, selectedPoint.longitude], 16, { animate: true })
       setTimeout(() => {
-        if (marker.isPopupOpen) { skipLabelSyncRef.current = false; return }
+        if (marker.isPopupOpen) return
         try { marker.openPopup() } catch(e) {
           const cluster = clusterRef.current
           if (cluster && cluster.zoomToShowLayer) {
             cluster.zoomToShowLayer(marker, () => {
-              skipLabelSyncRef.current = false
               marker.openPopup()
             })
-            setTimeout(() => { skipLabelSyncRef.current = false }, 2000)
             return
           }
         }
-        skipLabelSyncRef.current = false
       }, 400)
     }
   }, [selectedPoint])
 
   // Fit bounds on first load
-  // ★ OPTIMASI: skip label sync selama fit bounds awal
   const initialFitRef = useRef(false)
   useEffect(() => {
     if (!mapRef.current || !L || initialFitRef.current || points.length === 0 || selectedPoint) return
     const valid = points.filter(p => p.latitude !== 0 && p.longitude !== 0)
     if (valid.length > 0) {
       const bounds = L!.latLngBounds(valid.map(p => [p.latitude, p.longitude] as [number, number]))
-      skipLabelSyncRef.current = true
       mapRef.current.fitBounds(bounds, { padding: [50, 50], maxZoom: 14 })
-      setTimeout(() => { skipLabelSyncRef.current = false }, 1000)
       initialFitRef.current = true
     }
   }, [points, selectedPoint])
