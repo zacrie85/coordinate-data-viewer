@@ -515,13 +515,13 @@ export default function FilterSidebar({
                       <select className="flex-1 h-7 px-2 text-[11px] border border-slate-200 rounded bg-white focus:outline-none focus:ring-1 focus:ring-emerald-500/30"
                         value={markerConfig.nameCol1} onChange={e => onMarkerConfigChange({ ...markerConfig, nameCol1: e.target.value })}>
                         <option value="">Kolom 1</option>
-                        {columns.map(c => <option key={c} value={c}>{c}</option>}}
+                        {columns.map(c => <option key={c} value={c}>{c}</option>)}
                       </select>
                       <span className="text-slate-300 text-xs">-</span>
                       <select className="flex-1 h-7 px-2 text-[11px] border border-slate-200 rounded bg-white focus:outline-none focus:ring-1 focus:ring-emerald-500/30"
                         value={markerConfig.nameCol2} onChange={e => onMarkerConfigChange({ ...markerConfig, nameCol2: e.target.value })}>
                         <option value="">Kolom 2</option>
-                        {columns.map(c => <option key={c} value={c}>{c}</option>}}
+                        {columns.map(c => <option key={c} value={c}>{c}</option>)}
                       </select>
                     </div>
                   </div>
