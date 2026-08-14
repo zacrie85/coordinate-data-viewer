@@ -10,6 +10,17 @@ async function loadLeaflet() {
   if (L && ClusterGroup) return { L, ClusterGroup }
   const leaflet = await import('leaflet')
   L = leaflet.default
+
+  // Load Leaflet CSS
+  if (!document.querySelector('link[data-leaflet-css]')) {
+    const link = document.createElement('link')
+    link.rel = 'stylesheet'
+    link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'
+    link.setAttribute('data-leaflet-css', 'true')
+    document.head.appendChild(link)
+    await new Promise(r => setTimeout(r, 100))
+  }
+
   L.Icon.Default.mergeOptions({
     iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
     iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
@@ -209,7 +220,13 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
         })
         cluster.addTo(map)
         map.fitBounds([[-8, 95], [6, 141]])
-        if (!destroyed) { mapRef.current = map; clusterRef.current = cluster; setMapReady(true) }
+        if (!destroyed) {
+          mapRef.current = map
+          clusterRef.current = cluster
+          setMapReady(true)
+          // Force Leaflet to recalculate container size after layout settles
+          setTimeout(() => { if (mapRef.current) mapRef.current.invalidateSize() }, 200)
+        }
       } catch (err) {
         console.error('Map init error:', err)
         if (!destroyed) setMapError('Gagal memuat peta')
@@ -651,7 +668,7 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
   const totalCoord = points.filter(p => p.latitude !== 0 && p.longitude !== 0).length
 
   return (
-    <div className="absolute inset-0">
+    <div className="absolute inset-0 overflow-hidden">
       <div ref={containerRef} className="w-full h-full" />
 
       {/* Drag Zoom Banner */}
