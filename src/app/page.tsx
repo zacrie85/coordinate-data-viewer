@@ -91,6 +91,8 @@ export default function Home() {
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false)
   const [googleEarthOpen, setGoogleEarthOpen] = useState(false)
   const [bulkPhotoOpen, setBulkPhotoOpen] = useState(false)
+  // ★ Debounced search state — UI updates instantly, API call is delayed
+  const [searchInput, setSearchInput] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [hasCoord, setHasCoord] = useState('')
   const [customFilters, setCustomFilters] = useState<CustomFilterSlot[]>([
@@ -150,8 +152,31 @@ export default function Home() {
   useEffect(() => { loadColumns() }, [loadColumns])
   useEffect(() => { loadData() }, [loadData])
 
+  // ★ Debounce search: update API query 300ms after user stops typing
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current)
+    searchTimerRef.current = setTimeout(() => {
+      setSearchQuery(searchInput)
+    }, 300)
+    return () => { if (searchTimerRef.current) clearTimeout(searchTimerRef.current) }
+  }, [searchInput])
+
+  // ★ Debounce hasCoord: 150ms delay
+  const hasCoordTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingHasCoord = useRef(hasCoord)
+
   const handleFiltersChange = useCallback((f: { search: string; hasCoord: string; customFilters: CustomFilterSlot[] }) => {
-    setSearchQuery(f.search); setHasCoord(f.hasCoord); setCustomFilters(f.customFilters); setSelectedPoint(null)
+    // Search goes through debounced searchInput
+    setSearchInput(f.search)
+    // Debounce hasCoord
+    pendingHasCoord.current = f.hasCoord
+    if (hasCoordTimerRef.current) clearTimeout(hasCoordTimerRef.current)
+    hasCoordTimerRef.current = setTimeout(() => {
+      setHasCoord(pendingHasCoord.current)
+    }, 150)
+    setCustomFilters(f.customFilters)
+    setSelectedPoint(null)
     setSelectedAreaIds(null)
   }, [])
 
@@ -321,14 +346,14 @@ export default function Home() {
           <div className="lg:hidden fixed inset-0 z-40">
             <div className="absolute inset-0 bg-black/30" onClick={() => setMobileSidebar(false)} />
             <div className="relative z-50 w-80 h-full">
-              <FilterSidebar stats={stats} columns={columns} datasetName={datasetName} coordInfo={coordInfo} totalResults={points.length} searchQuery={searchQuery} hasCoord={hasCoord} customFilters={customFilters} markerConfig={markerConfig} onMarkerConfigChange={setMarkerConfig} onFiltersChange={(f) => { handleFiltersChange(f); setMobileSidebar(false) }} onUploadClick={() => { setUploadDialogOpen(true); setMobileSidebar(false) }} onDatasetSwitch={refreshAll} onExportCsv={handleExportCsv} onExportExcel={handleExportExcel} onClose={() => setMobileSidebar(false)} />
+              <FilterSidebar stats={stats} columns={columns} datasetName={datasetName} coordInfo={coordInfo} totalResults={points.length} searchQuery={searchInput} hasCoord={hasCoord} customFilters={customFilters} markerConfig={markerConfig} onMarkerConfigChange={setMarkerConfig} onFiltersChange={(f) => { handleFiltersChange(f); setMobileSidebar(false) }} onUploadClick={() => { setUploadDialogOpen(true); setMobileSidebar(false) }} onDatasetSwitch={refreshAll} onExportCsv={handleExportCsv} onExportExcel={handleExportExcel} onClose={() => setMobileSidebar(false)} />
             </div>
           </div>
         )}
 
         {sidebarOpen && (
           <div className="hidden lg:block shrink-0">
-            <FilterSidebar stats={stats} columns={columns} datasetName={datasetName} coordInfo={coordInfo} totalResults={points.length} searchQuery={searchQuery} hasCoord={hasCoord} customFilters={customFilters} markerConfig={markerConfig} onMarkerConfigChange={setMarkerConfig} onFiltersChange={handleFiltersChange} onUploadClick={() => setUploadDialogOpen(true)} onDatasetSwitch={refreshAll} onExportCsv={handleExportCsv} onExportExcel={handleExportExcel} />
+            <FilterSidebar stats={stats} columns={columns} datasetName={datasetName} coordInfo={coordInfo} totalResults={points.length} searchQuery={searchInput} hasCoord={hasCoord} customFilters={customFilters} markerConfig={markerConfig} onMarkerConfigChange={setMarkerConfig} onFiltersChange={handleFiltersChange} onUploadClick={() => setUploadDialogOpen(true)} onDatasetSwitch={refreshAll} onExportCsv={handleExportCsv} onExportExcel={handleExportExcel} />
           </div>
         )}
 

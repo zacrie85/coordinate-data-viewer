@@ -46,7 +46,6 @@ function pointInPolygon(lat: number, lng: number, polygon: [number, number][]): 
   return inside
 }
 
-// ── Hitung persentase: Active / Capacity x 100 ──
 function calcPct(meta: Record<string, any>, mc: MarkerConfig): { pct: number; activeRaw: string; capRaw: string } {
   if (mc.activeCol && mc.capacityCol) {
     const aRaw = String(meta[mc.activeCol] ?? '').trim()
@@ -97,6 +96,22 @@ function getPointLabel(meta: Record<string, any>, mc: MarkerConfig): string {
   return ''
 }
 
+// ── Throttle helper: max once per `ms` ──
+function throttle<T extends (...args: any[]) => void>(fn: T, ms: number): T {
+  let last = 0
+  let timer: ReturnType<typeof setTimeout> | null = null
+  return ((...args: any[]) => {
+    const now = Date.now()
+    const wait = ms - (now - last)
+    if (wait <= 0) {
+      last = now
+      fn(...args)
+    } else if (!timer) {
+      timer = setTimeout(() => { timer = null; last = Date.now(); fn(...args) }, wait)
+    }
+  }) as T
+}
+
 export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, columns, markerConfig, drawMode, onAreaSelected, selectedAreaIds, dragZoom, onDragZoomEnd }: MapViewProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<any>(null)
@@ -130,20 +145,18 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
   const dragBoxElRef = useRef<HTMLDivElement | null>(null)
   useEffect(() => { dragZoomRef.current = !!dragZoom }, [dragZoom])
 
+  // ★ Flag to skip label sync during programmatic zoom (zoomToShowLayer)
+  const skipLabelSyncRef = useRef(false)
+
   // Init map with clustering
   useEffect(() => {
-    if (!containerRef.current || mapRef.current) return
     let destroyed = false
     async function init() {
       try {
         const { L: leaflet, ClusterGroup: CG } = await loadLeaflet()
         if (destroyed || !containerRef.current) return
-        if (!document.querySelector('link[data-leaflet-css]')) {
-          const link = document.createElement('link'); link.rel = 'stylesheet'
-          link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'
-          link.setAttribute('data-leaflet-css', 'true'); document.head.appendChild(link)
-          await new Promise(r => setTimeout(r, 100))
-        }
+
+        // Load CSS once
         if (!document.querySelector('link[data-cluster-css]')) {
           const link = document.createElement('link'); link.rel = 'stylesheet'
           link.href = 'https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css'
@@ -280,7 +293,7 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
     return { green: g, blue: b, yellow: y, red: r, na }
   }, [points, markerConfig.activeCol, markerConfig.capacityCol])
 
-  // Update markers (debounced)
+  // Update markers (debounced 200ms)
   const updateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
@@ -317,47 +330,94 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
         cluster.addLayer(marker)
         markersRef.current.set(point.id, marker)
       }
-    }, 100)
+    }, 200)
 
     return () => { if (updateTimerRef.current) clearTimeout(updateTimerRef.current) }
   }, [mapReady, points, columns, stableSelect, selectedAreaIds])
 
-  // ── Label dinamis: hanya tampil saat zoom >= 13 ──
+  // ── ★ OPTIMIZED Label sync: throttled + viewport-only + max cap ──
   useEffect(() => {
     const map = mapRef.current
     const cluster = clusterRef.current
     if (!map || !cluster) return
 
     const LABEL_ZOOM = 13
+    const MAX_LABELS = 300
+    const THROTTLE_MS = 400
 
     const syncLabels = () => {
+      // Skip if programmatic zoom is happening (e.g. zoomToShowLayer)
+      if (skipLabelSyncRef.current) return
+
       const zoom = map.getZoom()
       const show = zoom >= LABEL_ZOOM
       const mc = mcRef.current
+      const bounds = map.getBounds()
+      let labelCount = 0
 
       cluster.eachLayer((layer: any) => {
+        // Check if this is a cluster group (has getChildCount) — skip clusters
+        if (typeof layer.getChildCount === 'function') return
+
         const hasTooltip = !!layer.getTooltip()
-        if (show && !hasTooltip) {
-          const meta = layer._pointMeta
-          if (meta) {
-            const label = getPointLabel(meta, mc)
-            if (label) {
-              layer.bindTooltip(label.substring(0, 25), {
-                permanent: true, direction: 'right', className: 'odp-map-label', offset: [6, -1],
-              })
+
+        if (show) {
+          // Only add label if in viewport and under cap
+          if (!hasTooltip && labelCount < MAX_LABELS) {
+            const latlng = layer.getLatLng?.()
+            if (latlng && bounds.contains(latlng)) {
+              const meta = layer._pointMeta
+              if (meta) {
+                const label = getPointLabel(meta, mc)
+                if (label) {
+                  layer.bindTooltip(label.substring(0, 25), {
+                    permanent: true, direction: 'right', className: 'odp-map-label', offset: [6, -1],
+                  })
+                  labelCount++
+                }
+              }
             }
           }
-        } else if (!show && hasTooltip) {
-          layer.unbindTooltip()
+        } else {
+          // Remove all labels when zoomed out
+          if (hasTooltip) {
+            layer.unbindTooltip()
+          }
         }
       })
     }
 
-    map.on('zoomend', syncLabels)
-    const initTimer = setTimeout(syncLabels, 300)
+    // Throttled version — max once per THROTTLE_MS
+    const throttledSync = throttle(syncLabels, THROTTLE_MS)
 
-    return () => { map.off('zoomend', syncLabels); clearTimeout(initTimer) }
+    map.on('zoomend', throttledSync)
+    map.on('moveend', throttledSync)
+    const initTimer = setTimeout(syncLabels, 500)
+
+    return () => {
+      map.off('zoomend', throttledSync)
+      map.off('moveend', throttledSync)
+      clearTimeout(initTimer)
+    }
   }, [mapReady])
+
+  // ★ Re-sync labels when labelCol changes
+  useEffect(() => {
+    const map = mapRef.current
+    const cluster = clusterRef.current
+    if (!map || !cluster) return
+    const zoom = map.getZoom()
+    const show = zoom >= 13
+
+    cluster.eachLayer((layer: any) => {
+      if (typeof layer.getChildCount === 'function') return
+      if (layer.getTooltip()) layer.unbindTooltip()
+    })
+    if (show) {
+      // Small delay then re-sync
+      setTimeout(() => map.fire('zoomend'), 50)
+    }
+  }, [markerConfig.labelCol, mapReady])
 
   // Esc untuk keluar dari drag zoom
   useEffect(() => {
@@ -423,7 +483,10 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
           const p1 = map.containerPointToLatLng([Math.min(sx, ex), Math.min(sy, ey)])
           const p2 = map.containerPointToLatLng([Math.max(sx, ex), Math.max(sy, ey)])
           const bounds = L!.latLngBounds(p1, p2)
+          skipLabelSyncRef.current = true
           map.fitBounds(bounds, { padding: [20, 20], maxZoom: 18 })
+          // Re-enable label sync after zoom animation
+          setTimeout(() => { skipLabelSyncRef.current = false }, 800)
           onDragZoomEnd?.()
           if (dragDivRef.current) { dragDivRef.current.remove(); dragDivRef.current = null }
           map.dragging.enable()
@@ -460,7 +523,7 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
     }
   }, [dragZoom, onDragZoomEnd])
 
-  // Highlight selected point
+  // Highlight selected point — ★ skip label sync during zoomToShowLayer
   useEffect(() => {
     if (!mapRef.current || !selectedPoint) return
     if (selectedPoint.latitude === 0 && selectedPoint.longitude === 0) return
@@ -469,12 +532,20 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
       mapRef.current.setView([selectedPoint.latitude, selectedPoint.longitude], 16, { animate: true })
       setTimeout(() => {
         if (marker.isPopupOpen) return
+        skipLabelSyncRef.current = true
         try { marker.openPopup() } catch(e) {
           const cluster = clusterRef.current
           if (cluster && cluster.zoomToShowLayer) {
-            cluster.zoomToShowLayer(marker, () => { marker.openPopup() })
+            cluster.zoomToShowLayer(marker, () => {
+              skipLabelSyncRef.current = false
+              marker.openPopup()
+            })
+            // Fallback: re-enable after 2s in case zoomToShowLayer doesn't callback
+            setTimeout(() => { skipLabelSyncRef.current = false }, 2000)
+            return
           }
         }
+        skipLabelSyncRef.current = false
       }, 400)
     }
   }, [selectedPoint])
@@ -486,7 +557,9 @@ export default function ODPMap({ points, loading, selectedPoint, onSelectPoint, 
     const valid = points.filter(p => p.latitude !== 0 && p.longitude !== 0)
     if (valid.length > 0) {
       const bounds = L!.latLngBounds(valid.map(p => [p.latitude, p.longitude] as [number, number]))
+      skipLabelSyncRef.current = true
       mapRef.current.fitBounds(bounds, { padding: [50, 50], maxZoom: 14 })
+      setTimeout(() => { skipLabelSyncRef.current = false }, 1000)
       initialFitRef.current = true
     }
   }, [points, selectedPoint])
